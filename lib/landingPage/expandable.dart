@@ -1,0 +1,287 @@
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+
+class ExpandablePageView extends StatefulWidget {
+  final List<Widget>? children;
+  final int? itemCount;
+  final Widget Function(BuildContext, int)? itemBuilder;
+  final PageController? controller;
+  final ValueChanged<int>? onPageChanged;
+  final bool reverse;
+  final Duration animationDuration;
+  final Curve animationCurve;
+  final ScrollPhysics? physics;
+  final bool pageSnapping;
+  final DragStartBehavior dragStartBehavior;
+  final bool allowImplicitScrolling;
+  final String? restorationId;
+  final Clip clipBehavior;
+  final bool padEnds;
+
+  /// Whether to animate the first page displayed by this widget.
+  ///
+  /// By default (false) [ExpandablePageView] will resize to the size of it's
+  /// initially displayed page without any animation.
+  final bool animateFirstPage;
+
+  /// The estimated size of displayed pages.
+  ///
+  /// This property can be used to indicate how big a page will be more or less.
+  /// By default (0.0) all pages will have their initial sizes set to 0.0
+  /// until they report that their size changed, which will result in
+  /// [ExpandablePageView] size animation. This can lead to a behavior
+  /// when after changing the page, [ExpandablePageView] will first shrink to 0.0
+  /// and then animate to the size of the page.
+  ///
+  /// For example: If there is certainty that most pages displayed by [ExpandablePageView]
+  /// will vary from 200 to 600 in size, then [estimatedPageSize] could be set to some
+  /// value in that range, to at least partially remove the "shrink and expand" effect.
+  ///
+  /// Setting it to a value much bigger than most pages' sizes might result in a
+  /// reversed - "expand and shrink" - effect.
+  final double estimatedPageSize;
+
+  const ExpandablePageView({
+    this.children,
+    this.itemCount,
+    this.itemBuilder,
+    this.controller,
+    this.onPageChanged,
+    this.reverse = false,
+    this.animationDuration = const Duration(milliseconds: 100),
+    this.animationCurve = Curves.easeInOutCubic,
+    this.physics,
+    this.pageSnapping = true,
+    this.dragStartBehavior = DragStartBehavior.start,
+    this.allowImplicitScrolling = false,
+    this.restorationId,
+    this.clipBehavior = Clip.hardEdge,
+    this.animateFirstPage = false,
+    this.estimatedPageSize = 0.0,
+    this.padEnds = false,
+    super.key,
+  })  : assert(
+            (children != null && itemCount == null && itemBuilder == null) ||
+                (children == null && itemCount != null && itemBuilder != null),
+            'Cannot provide both children and itemBuilder\n'
+            'If you need a fixed PageView, use children\n'
+            'If you need a dynamically built PageView, use itemBuilder and itemCount'),
+        assert(estimatedPageSize >= 0.0);
+
+  @override
+  ExpandablePageViewState createState() => ExpandablePageViewState();
+}
+
+class ExpandablePageViewState extends State<ExpandablePageView> {
+  late PageController _pageController;
+  late List<double> _heights;
+  int _currentPage = 0;
+  int _previousPage = 0;
+  bool _shouldDisposePageController = false;
+  bool _firstPageLoaded = false;
+
+  double get _currentHeight => _heights[_currentPage];
+
+  double get _previousHeight => _heights[_previousPage];
+
+  bool get isBuilder => widget.itemBuilder != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _heights = _prepareHeights();
+    _pageController = widget.controller ?? PageController();
+    _pageController.addListener(_updatePage);
+    _shouldDisposePageController = widget.controller == null;
+  }
+
+  @override
+  void didUpdateWidget(covariant ExpandablePageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?.removeListener(_updatePage);
+      _pageController = widget.controller ?? PageController();
+      _pageController.addListener(_updatePage);
+      _shouldDisposePageController = widget.controller == null;
+    }
+    if (_shouldReinitializeHeights(oldWidget)) {
+      final currentPageHeight = _heights[_currentPage];
+      _heights = _prepareHeights();
+      _heights[_currentPage] = currentPageHeight;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pageController.removeListener(_updatePage);
+    if (_shouldDisposePageController) {
+      _pageController.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: _previousHeight, end: _currentHeight),
+      duration: _getDuration(),
+      curve: widget.animationCurve,
+      builder: (context, value, child) => SizedBox(height: value, child: child),
+      child: _buildPageView(),
+    );
+  }
+
+  bool _shouldReinitializeHeights(ExpandablePageView oldWidget) {
+    if (oldWidget.itemBuilder != null && isBuilder) {
+      return oldWidget.itemCount != widget.itemCount;
+    }
+    return oldWidget.children?.length != widget.children?.length;
+  }
+
+  Duration _getDuration() {
+    if (_firstPageLoaded) {
+      return widget.animationDuration;
+    }
+    return widget.animateFirstPage ? widget.animationDuration : Duration.zero;
+  }
+
+  Widget _buildPageView() {
+    if (isBuilder) {
+      return PageView.builder(
+        key: widget.key,
+        reverse: widget.reverse,
+        controller: _pageController,
+        physics: widget.physics,
+        pageSnapping: widget.pageSnapping,
+        onPageChanged: widget.onPageChanged,
+        itemBuilder: _itemBuilder,
+        itemCount: widget.itemCount,
+        dragStartBehavior: widget.dragStartBehavior,
+        allowImplicitScrolling: widget.allowImplicitScrolling,
+        restorationId: widget.restorationId,
+        clipBehavior: widget.clipBehavior,
+        padEnds: widget.padEnds,
+      );
+    }
+    return PageView(
+      key: widget.key,
+      reverse: widget.reverse,
+      controller: _pageController,
+      physics: widget.physics,
+      pageSnapping: widget.pageSnapping,
+      onPageChanged: widget.onPageChanged,
+      dragStartBehavior: widget.dragStartBehavior,
+      allowImplicitScrolling: widget.allowImplicitScrolling,
+      restorationId: widget.restorationId,
+      clipBehavior: widget.clipBehavior,
+      padEnds: widget.padEnds,
+      children: _sizeReportingChildren(),
+    );
+  }
+
+  List<double> _prepareHeights() {
+    return isBuilder
+        ? List.filled(widget.itemCount!, widget.estimatedPageSize)
+        : widget.children!.map((child) => widget.estimatedPageSize).toList();
+  }
+
+  void _updatePage() {
+    final newPage = _pageController.page!.round();
+    if (_currentPage != newPage) {
+      setState(() {
+        _firstPageLoaded = true;
+        _previousPage = _currentPage;
+        _currentPage = newPage;
+      });
+    }
+  }
+
+  Widget _itemBuilder(BuildContext context, int index) {
+    final item = widget.itemBuilder!(context, index);
+    return OverflowPage(
+      onSizeChange: (size) => setState(() => _heights[index] = size.height),
+      child: item,
+    );
+  }
+
+  List<Widget> _sizeReportingChildren() => widget.children!
+      .asMap()
+      .map(
+        (index, child) => MapEntry(
+          index,
+          OverflowPage(
+            onSizeChange: (size) => setState(() => _heights[index] = size.height),
+            child: child,
+          ),
+        ),
+      )
+      .values
+      .toList();
+}
+
+class OverflowPage extends StatelessWidget {
+  final ValueChanged<Size> onSizeChange;
+  final Widget child;
+
+  const OverflowPage({
+    super.key,
+    required this.onSizeChange,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return OverflowBox(
+      alignment: Alignment.topCenter,
+      minHeight: 0,
+      maxHeight: double.infinity,
+      child: SizeReportingWidget(onSizeChange: onSizeChange, child: child),
+    );
+  }
+}
+
+class SizeReportingWidget extends StatefulWidget {
+  final Widget child;
+  final ValueChanged<Size> onSizeChange;
+
+  const SizeReportingWidget({
+    super.key,
+    required this.child,
+    required this.onSizeChange,
+  });
+
+  @override
+  SizeReportingWidgetState createState() => SizeReportingWidgetState();
+}
+
+class SizeReportingWidgetState extends State<SizeReportingWidget> {
+  final _widgetKey = GlobalKey();
+  Size? _oldSize;
+
+  @override
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _notifySize());
+    return NotificationListener<SizeChangedLayoutNotification>(
+      onNotification: (_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _notifySize());
+        return true;
+      },
+      child: SizeChangedLayoutNotifier(
+        child: Container(
+          key: _widgetKey,
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+
+  void _notifySize() {
+    final context = _widgetKey.currentContext;
+    if (context == null) return;
+    final size = context.size;
+    if (_oldSize != size) {
+      _oldSize = size;
+      widget.onSizeChange(size!);
+    }
+  }
+}
